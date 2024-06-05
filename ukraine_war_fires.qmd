@@ -1,0 +1,85 @@
+---
+title: "Ukraine IDPs and War Fire Events"
+author: "Andrea Nasuto"
+format: html
+editor: visual
+---
+
+## War Fire
+
+Here Some Description
+
+## Code
+
+### Load Data
+
+```{r}
+# load required package
+library(dplyr)
+library(lubridate)
+library(sf)
+library(ggplot2)
+library(ggmap)
+library(tmap)
+library(tmaptools)
+library(ggspatial)
+```
+
+### Load Data
+
+```{r}
+# read the csv file
+war_fires <- read.csv("data/economist_war_fire/ukraine_war_fires.csv")
+```
+
+```{r}
+head(war_fires)
+```
+
+```{r}
+# convert date column to date type
+war_fires$date <- ymd(war_fires$date)
+```
+
+### Select specific data
+
+```{r}
+# get the earliest date of the dataset
+print(min(war_fires$date))
+```
+
+```{r}
+# define start and end dates
+start_date <- ymd("2022-02-24")
+end_date <- ymd("2022-08-31")
+
+# filter activities within the date range
+war_fires_filtered <- war_fires %>%
+  filter(date >= start_date & date <= end_date)
+
+# display the first few rows of the filtered data
+head(war_fires_filtered)
+
+# save the filtered data to a new csv file (optional)
+#write.csv(war_fires_filtered, "war_fires_filtered.csv", row.names = FALSE)
+```
+
+```{r}
+# create spatial dataset from war_fires_filtered
+war_fires_filtered_geom <- st_as_sf(war_fires_filtered, coords = c("LONGITUDE", "LATITUDE"), crs = 4326) # set crs to WGS84
+
+# ensure geometry is valid
+war_fires_filtered_geom = sf::st_make_valid(war_fires_filtered_geom)
+
+war_fires_filtered_geom <- st_transform(war_fires_filtered_geom, crs = 4326)  # Use appropriate CRS
+```
+
+```{r}
+# set tmap to interactive mode
+tmap_mode("view")
+
+# Create the interactive map
+tm_shape(war_fires_filtered_geom) +
+  tm_basemap(server = "OpenStreetMap") +
+  tm_dots()
+```
