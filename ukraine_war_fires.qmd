@@ -16,6 +16,7 @@ Here Some Description
 ```{r}
 # load required package
 library(dplyr)
+library(tidyr)
 library(lubridate)
 library(sf)
 library(ggplot2)
@@ -29,7 +30,7 @@ library(ggspatial)
 
 ```{r}
 # read the csv file
-war_fires <- read.csv("data/economist_war_fire/ukraine_war_fires.csv")
+war_fires <- read.csv("data/war_fire/ukraine_war_fires.csv")
 ```
 
 ```{r}
@@ -41,7 +42,7 @@ head(war_fires)
 war_fires$date <- ymd(war_fires$date)
 ```
 
-### Select specific data
+### Select data with Feb - Aug 2022
 
 ```{r}
 # get the earliest date of the dataset
@@ -59,9 +60,31 @@ war_fires_filtered <- war_fires %>%
 
 # display the first few rows of the filtered data
 head(war_fires_filtered)
+```
 
-# save the filtered data to a new csv file (optional)
-#write.csv(war_fires_filtered, "war_fires_filtered.csv", row.names = FALSE)
+```{r}
+# create weeks df
+war_fires_filtered <- war_fires_filtered %>% mutate(week = floor_date(date, "week", week_start = 1))
+weeks <- unique(war_fires_filtered$week)
+weeks <- unique(war_fires_filtered$week) %>% sort()
+weeks <- data.frame(week = weeks_list, week_number = seq_along(weeks_list))
+
+# create dataset with all weeks and oblasts and raions name
+all_oblast_weeks <- expand.grid(
+  oblast_name = unique(oblasts$NAME_1), #ADM1_EN for correct raions
+  week = weeks$week
+)
+
+# get the week number
+all_oblast_weeks <- merge(all_oblast_weeks, weeks %>% select(week, week_number), by = "week")
+
+# raion
+all_raion_weeks <- expand.grid(
+  raion_name = unique(raions$NAME_2), #ADM2_EN for correct raions
+  week = weeks$week
+)
+# get the week number
+all_raion_weeks <- merge(all_raion_weeks, weeks %>% select(week, week_number), by = "week")
 ```
 
 ```{r}
@@ -74,12 +97,295 @@ war_fires_filtered_geom = sf::st_make_valid(war_fires_filtered_geom)
 war_fires_filtered_geom <- st_transform(war_fires_filtered_geom, crs = 4326)  # Use appropriate CRS
 ```
 
-```{r}
+```{r eval=TRUE, include=TRUE}
 # set tmap to interactive mode
 tmap_mode("view")
 
 # Create the interactive map
-tm_shape(war_fires_filtered_geom) +
+war_fire_map <- tm_shape(war_fires_filtered_geom) +
   tm_basemap(server = "OpenStreetMap") +
-  tm_dots()
+  tm_dots() +
+  tm_layout(title = "War-Fire Events")
+
+war_fire_map <- tm_shape(war_fires_filtered_geom) +
+  tm_basemap(server = "OpenStreetMap") +
+  tm_dots() +
+  tm_layout(title = "War-Fire Events")
+
+# Create the tmap element
+raions_GADM_map <- tm_shape(raions) +
+  tm_borders() +  # Only show boundaries
+  tm_fill(alpha = 0)  # Make the fill transparent
+
+war_fire_map + raions_GADM_map
+```
+
+### Aggregate war-fire events at raion and oblast level
+
+```{r warning=FALSE, message= FALSE}
+# rename war_fires_filtered_geom
+wf <- war_fires_filtered_geom
+
+# read shapefiles
+#oblasts <- st_read("data/shapefiles/oblasts/oblasts.shp") # skip first row
+raions <- st_read("data/shapefiles/raions/raions.shp") # skip first row
+
+#oblasts <- st_read("data/gadm41_UKR_shp/gadm41_UKR_1.shp")[-1,] # skip first row
+#raions <- st_read("data/gadm41_UKR_shp/gadm41_UKR_2.shp")[-1,] # skip first row
+
+# ensure both shapefiles and events are in the same CRS
+oblasts <- st_transform(oblasts, st_crs(wf))
+raions <- st_transform(raions, st_crs(oblasts))
+
+# spatial join to add oblast and raion info to the events
+wf_oblasts <- st_join(oblasts, wf, left = TRUE) # deselect date with correct raions shp
+wf_raions <- st_join(raions, wf, left = TRUE) # deselect date with correct raions shp
+
+# rename area name variables
+wf_oblasts <- wf_oblasts %>% rename(oblast_name = NAME_1) #ADM1_ENG for correct raions
+wf_raions <- wf_raions %>% rename(raion_name = NAME_2) #ADM2_ENG for correct raions
+
+# aggregate by oblast and week
+oblast_weekly <- wf_oblasts %>%
+  group_by(oblast_name, week) %>%
+  summarise(count = n(), .groups = 'drop')
+
+# aggregate by raion and week
+raion_weekly <- wf_raions %>%
+  group_by(raion_name, week) %>%
+  summarise(count = n(), .groups = 'drop')
+```
+
+```{r}
+# include all weeks and oblasts in the aggregated df per oblast per week
+oblast_weekly <- left_join(all_oblast_weeks, oblast_weekly, by = c("oblast_name", "week"))
+
+# when oblasts have NA replace with 0 since it means that there are no events
+oblast_weekly$count[is.na(oblast_weekly$count)] <- 0
+
+# attach geometries since some oblasts have empty geometry
+oblast_weekly <- left_join(oblast_weekly %>% select(-geometry), oblasts %>% select(NAME_1, geometry), by = c("oblast_name" = "NAME_1"))
+
+# include all weeks and raions in the aggregated df per raion per week
+raion_weekly <- left_join(all_raion_weeks, raion_weekly, by = c("raion_name", "week"))
+
+# when oblasts have NA replace with 0 since it means that there are no events
+raion_weekly$count[is.na(raion_weekly$count)] <- 0
+
+# attach geometries since some oblasts have empty geometry
+raion_weekly <- left_join(raion_weekly %>% select(-geometry), raions %>% select(NAME_2, geometry), by = c("raion_name" = "NAME_2"))
+```
+
+```{r}
+# convert the 'week' column to character format for raion_weekly and oblast_weekly
+raion_weekly$week <- as.character(raion_weekly$week)
+oblast_weekly$week <- as.character(oblast_weekly$week)
+
+# convert the 'week' column to Date format using lubridate for raion_weekly and oblast_weekly
+raion_weekly$week <- ymd(raion_weekly$week)
+oblast_weekly$week <- ymd(oblast_weekly$week)
+```
+
+#### Standardization
+
+```{r}
+# min-max standardization
+raion_weekly <-  raion_weekly %>%
+  mutate(intensity = (count - min(count, na.rm = TRUE)) / (max(count, na.rm = TRUE) - min(count, na.rm = TRUE)) * 100)
+```
+
+```{r}
+# z-score standardization and then min-max to fit the 0-100 scale
+
+# z-score standardization
+raion_weekly <- raion_weekly %>%
+  mutate(z_score = (count - mean(count, na.rm = TRUE)) / sd(count, na.rm = TRUE))
+
+# min-max normalization to scale z-scores between 0 and 100
+raion_weekly <- raion_weekly %>%
+  mutate(intensity = ((z_score - min(z_score, na.rm = TRUE)) / 
+                      (max(z_score, na.rm = TRUE) - min(z_score, na.rm = TRUE))) * 100)
+
+```
+
+#### Map for a given month
+
+```{r}
+# Define the month variable as a single-digit numeric value
+month <- 3  # For July -> 7
+
+# extract observations for the month of July for raion_weekly adn oblast_weekly
+raion_month <- raion_weekly %>% filter(month(week) == month)
+oblast_month <- oblast_weekly %>% filter(month(week) == month)
+
+# Remove rows with missing coordinates before converting to sf objects
+#raion_month <- raion_month[!is.na(raion_month$geometry), ]
+#oblast_month <- oblast_month[!is.na(oblast_month$geometry), ]
+
+# group by month
+raion_month <- raion_month %>% 
+  st_drop_geometry() %>%
+  group_by(raion_name) %>%
+  summarise(count = sum(count))
+
+oblast_month <- oblast_month %>% 
+  st_drop_geometry() %>%
+  group_by(oblast_name) %>%
+  summarise(count = sum(count))
+
+# reattach geometry
+#raion_month <- left_join(raion_month, wf_raions %>% select(raion_name, geometry), by = "raion_name") %>% st_as_sf()
+
+#oblast_month <- left_join(oblast_month, wf_oblasts %>% select(oblast_name, geometry), by = "oblast_name") %>% st_as_sf()
+```
+
+```{r}
+# Create the map for raion_month
+raion_map <- tm_shape(raion_month) +
+  tm_basemap(server = "OpenStreetMap") +
+  tm_polygons("count", palette = "Blues", title = paste0("Raion-level Monthly Count - ", '0', month))
+
+# Create the map for oblast_month
+oblast_map <- tm_shape(oblast_month) +
+  tm_basemap(server = "OpenStreetMap") +
+  tm_polygons("count", palette = "Reds", title = paste0("Oblast-level Monthly Count - ", '0', month))
+
+# Combine both maps
+combined_map <- oblast_map + raion_map
+
+# set tmap to interactive mode
+tmap_mode("view")
+tmap::tmap_leaflet(combined_map)
+```
+
+#### Map Animation at Raions and Oblast level for each week
+
+```{r}
+# make sure week is a date
+raion_weekly$week <- as.Date(raion_weekly$week)
+
+# check no NA in week
+raion_weekly_animation <- raion_weekly %>% filter(!is.na(week))
+
+# set dataset as sf
+raion_weekly_animation <- st_as_sf(raion_weekly_animation, sf_column_name = "geometry", crs= 4326)
+
+# arrange from the latest to the earliest
+raion_weekly_animation <- raion_weekly_animation %>% arrange(week)
+
+# create breaks
+breaks <- classInt::classIntervals(raion_weekly_animation$intensity, n = 5, style = "jenks")$brks
+
+# Function to create individual maps
+create_map <- function(time) {
+  tm_shape(raion_weekly_animation %>%
+             filter(week == time)) +
+    tm_basemap("OpenStreetMap") +
+    tm_polygons("intensity", palette = "Blues", title = "Intensity (0-100)", 
+                breaks = breaks) +
+    tm_layout(title = paste("Week:", time))
+}
+
+# List of time points
+time_points <- unique(raion_weekly_animation$week)
+
+# Create the animation
+tmap_animation(
+  tm = lapply(time_points, create_map),
+  filename = "output/old_raion_intensity.gif",
+  width = 800,
+  height = 600,
+  delay = 100
+)
+```
+
+### Interactive Map at Raion Level
+
+```{r}
+time = '2022-07-11'
+tm_shape(raion_weekly_animation %>%
+             filter(week == time)) + # select specific week by looking at time_points
+    tm_polygons("intensity", palette = "Blues", title = "Intensity (0-100)", 
+                breaks = breaks) +
+    tm_layout(title = paste("Week:", time))
+
+tmap_mode("view")
+```
+
+### IDPs data
+
+```{r}
+# load the internal displacement data
+idp_raion <- read.csv('data/displacement_data/raions.csv')
+idp_oblasts <- read.csv('data/displacement_data/oblasts.csv')
+```
+
+```{r}
+# load raion GADM 
+idp_raion_geom <- st_read('data/gadm41_UKR_shp/gadm41_UKR_2.shp')[-1, ]
+
+# calculate the idp_raion_geom of each raion from GADM
+idp_raion_geom <- idp_raion_geom %>%
+  mutate(geometry = st_centroid(geometry))
+
+# attach geometries to raion origin
+idp_raion_origin <- idp_raion %>% left_join(idp_raion_geom %>% select('NAME_1', 'geometry'), by = 'NAME_1')
+
+# attach geometries to raion destination
+idp_raion_destination <- idp_raion %>% left_join(idp_raion_geom %>% select('NAME_2', 'geometry'), by = 'NAME_2')
+```
+
+```{r}
+# remove duplicate - !this is not required with with st_join centroids
+idp_raion_origin_unique <- idp_raion_origin %>% distinct(NAME_1, NAME_2, month, day, .keep_all = TRUE)
+
+idp_raion_destination_unique <- idp_raion_destination %>% distinct(NAME_1, NAME_2, month, day, .keep_all = TRUE)
+
+# set up dataset as sf
+idp_raion_origin <- st_as_sf(idp_raion_origin_unique, sf_column_name = "geometry", crs= 4326)
+
+idp_raion_destination <- st_as_sf(idp_raion_destination_unique, sf_column_name = "geometry", crs= 4326)
+```
+
+```{r}
+# spatial joint idp raion at origin with new raion shapefiles
+idp_raion_new_origin <- st_join(raions %>% select(1,5, geometry), idp_raion_origin, 
+                         #largest = TRUE
+)
+
+idp_raion_new_destination <- st_join(raions %>% select(1,5, geometry), idp_raion_destination)
+#                         #largest = TRUE)
+```
+
+```{r}
+# rename ADM2_EN in idp_raion_new_origin
+idp_raion_new_origin <- idp_raion_new_origin %>% rename(raion_name_origin = ADM2_EN)
+```
+
+```{r}
+# create a unique dataset with ADM2_EN and NAME_1 from idp_raion_new_destination
+unique_pairs <- idp_raion_new_destination %>%
+  st_drop_geometry() %>%
+  select(ADM2_EN, NAME_2) %>%
+  distinct() %>%
+  na.omit()
+
+# rename ADM2_EN to raion_destination_name
+unique_pairs <- unique_pairs %>%
+  rename(raion_name_destination = ADM2_EN)
+```
+
+```{r}
+# match name of the old raion with the new raion for the destination
+idp_raion_new <- idp_raion_new_origin %>% left_join(unique_pairs, by = "NAME_2")
+```
+
+```{r}
+summarized_values <- idp_raion_new %>% st_drop_geometry() %>%
+  group_by(raion_name_origin, raion_name_destination, month, day) %>%
+  summarise(
+    total_baseline_raion_population = sum(total_baseline_raion_population, na.rm = TRUE),
+    total_count = sum(total_count, na.rm = TRUE),
+    net_pop_change = sum(net_pop_change, na.rm = TRUE)
+  )
 ```
