@@ -24,6 +24,8 @@ library(ggmap)
 library(tmap)
 library(tmaptools)
 library(ggspatial)
+library(corrr)
+library(plotly)
 ```
 
 ### Load Data
@@ -218,11 +220,11 @@ raion_weekly <- raion_weekly %>%
 #### Export datasets
 
 ```{r}
-write.csv(raion_weekly, "output/data/war_fire_raion.csv", row.names = FALSE) # export war fire events at raion level
+write.csv(raion_weekly %>% select(-geometry), "output/data/war_fire_raion.csv", row.names = FALSE) # export war fire events at raion level
 ```
 
 ```{r}
-write.csv(oblast_weekly, "output/data/war_fire_oblast.csv", row.names = FALSE) # export war fire events at oblast level
+write.csv(oblast_weekly %>% select(-geometry), "output/data/war_fire_oblast.csv", row.names = FALSE) # export war fire events at oblast level
 ```
 
 ## Visualizations
@@ -300,28 +302,108 @@ tm_shape(raion_weekly_animation %>%
 tmap_mode("view")
 ```
 
+## Internal Displacement and War-Fire Events
+
 ### IDPs data
 
 ```{r}
 # load the internal displacement data grouped at raion level (new boundaries)
 idp_raion <- read.csv('data/displacement_data/updated_raions.csv')
-idp_oblasts <- read.csv('data/displacement_data/oblasts.csv')
 ```
 
 ```{r}
-# load raion GADM 
-idp_raion_geom <- st_read('data/gadm41_UKR_shp/gadm41_UKR_2.shp')[-1, ]
+# rename raion variable
+idp_raion <- idp_raion %>% rename(raion_name = ADM2_EN,
+                                  oblast_name = ADM1_EN)
 
-# calculate the idp_raion_geom of each raion from GADM
-idp_raion_geom <- idp_raion_geom %>%
-  mutate(geometry = st_centroid(geometry))
+# calculate the week by date
 
-# attach geometries to raion origin
-idp_raion_origin <- idp_raion %>% left_join(idp_raion_geom %>% select('ADM2_EN', 'geometry'), by = 'ADM2_EN')
-
-# attach geometries to raion destination
-idp_raion_destination <- idp_raion %>% left_join(idp_raion_geom %>% select('ADM2_EN', 'geometry'), by = 'ADM2_EN')
 ```
+
+### Relationship between IDPs data and war-fire intensity
+
+"net_refugee_outflow" is the net number of people leaving Ukraine on a particular day after the invasion\
+\
+"net_pop_change" is the
+
+"proportional_net_change" is the
+
+```{r}
+# merge the datasets by raion_name and week_number
+merged_data <- idp_raion %>%
+  inner_join(raion_weekly, by = c("raion_name", "week_number")) %>%
+  select(raion_name, week, week_number, counts, intensity, net_refugee_outflow, net_pop_change, proportional_net_change)
+```
+
+```{r}
+# 1) calculate the correlation matrix
+
+# select relevant columns for correlation
+cor_data <- merged_data %>%
+  select(net_refugee_outflow, net_pop_change, proportional_net_change, counts, intensity)
+
+# calculate the correlation matrix
+cor_matrix <- cor(cor_data, use = "complete.obs")
+
+# display the correlation matrix
+print(cor_matrix)
+
+# visualize the correlation matrix
+cor_plot <- cor_matrix %>%
+  as_cordf() %>%
+  network_plot(min_cor = 0.2)
+```
+
+```{r}
+# 2) display the correlation between war-fire events intensity and population net change
+
+# convert raion_weekly to spatial data
+raion_sf <- st_as_sf(raion_weekly, coords = c("longitude", "latitude"), crs = 4326)
+
+# merge spatial data with idp_raion data
+map_data <- raion_sf %>%
+  inner_join(idp_raion, by = "raion_name")
+
+# plot the map with interaction
+tmap_mode("view")
+tm_shape(map_data) +
+  tm_polygons("net_pop_change", title = "Net Population Change") +
+  tm_facets(by = "intensity", free.coords = FALSE)
+```
+
+```{r}
+# 3) produce a bivariate map displaying intensity and net_pop_change
+
+# create a new variable for bivariate mapping
+map_data <- map_data %>%
+  mutate(bivariate = cut(net_pop_change, breaks = 5, labels = FALSE) +
+           cut(intensity, breaks = 5, labels = FALSE) * 10)
+
+# plot the bivariate map
+tmap_mode("view")
+tm_shape(map_data) +
+  tm_polygons("bivariate", title = "Bivariate Map") +
+  tm_facets(by = "bivariate", free.coords = FALSE)
+```
+
+```{r}
+# 4) produce a scatterplot between intensity and net_pop_change
+
+# plot the scatterplot
+scatter_plot <- ggplot(merged_data, aes(x = intensity, y = net_pop_change)) +
+  geom_point() +
+  labs(title = "Scatterplot between War-Fire Intensity and Net Population Change",
+       x = "Intensity",
+       y = "Net Population Change")
+
+# make the scatterplot interactive
+interactive_scatter <- ggplotly(scatter_plot)
+
+# display the interactive scatterplot
+interactive_scatter
+```
+
+### Code Dump
 
 ```{r}
 # remove duplicate - !this is not required with with st_join centroids
@@ -343,11 +425,6 @@ idp_raion_new_origin <- st_join(raions %>% select(1,5, geometry), idp_raion_orig
 
 idp_raion_new_destination <- st_join(raions %>% select(1,5, geometry), idp_raion_destination)
 #                         #largest = TRUE)
-```
-
-```{r}
-# rename ADM2_EN in idp_raion_new_origin
-idp_raion_new_origin <- idp_raion_new_origin %>% rename(raion_name_origin = ADM2_EN)
 ```
 
 ```{r}
