@@ -153,7 +153,11 @@ wf_raions <- st_join(raions, wf, left = TRUE) # deselect date with correct raion
 # rename area name variables
 wf_oblasts <- wf_oblasts %>% rename(oblast_name = ADM1_EN) #ADM2_EN for correct raions
 wf_raions <- wf_raions %>% rename(raion_name = ADM2_EN) #ADM2_EN for correct raions
+```
 
+#### Aggregate at weekly level
+
+```{r}
 # aggregate by oblast and week
 oblast_weekly <- wf_oblasts %>%
   group_by(oblast_name, week) %>%
@@ -161,6 +165,7 @@ oblast_weekly <- wf_oblasts %>%
 
 # aggregate by raion and week
 raion_weekly <- wf_raions %>%
+  filter(!is.na(fire)) %>% # exclude events where 'fire' is NA
   group_by(raion_name, week) %>%
   summarise(count = n(), .groups = 'drop')
 ```
@@ -178,7 +183,7 @@ oblast_weekly <- left_join(oblast_weekly %>% select(-geometry), oblasts %>% sele
 # include all weeks and raions in the aggregated df per raion per week
 raion_weekly <- left_join(all_raion_weeks, raion_weekly, by = c('raion_name', 'week'))
 
-# when oblasts have NA replace with 0 since it means that there are no events
+# when raion have NA replace with 0 since it means that there are no events
 raion_weekly$count[is.na(raion_weekly$count)] <- 0
 
 # attach geometries since some oblasts have empty geometry
@@ -195,7 +200,7 @@ raion_weekly$week <- ymd(raion_weekly$week)
 oblast_weekly$week <- ymd(oblast_weekly$week)
 ```
 
-#### Standardization
+#### Standardization at weekly level
 
 ```{r}
 # min-max standardization
@@ -220,6 +225,25 @@ raion_weekly <- raion_weekly %>%
 raion_weekly <- raion_weekly %>%
   mutate(intensity = ((z_score - min(z_score, na.rm = TRUE)) / 
                       (max(z_score, na.rm = TRUE) - min(z_score, na.rm = TRUE))) * 100)
+```
+
+#### Aggregation at Raion Level
+
+```{r}
+# aggregate war-fire events at raion level not weekly level
+wf_raions_summarized <- wf_raions %>% st_drop_geometry() %>%
+  filter(!is.na(fire)) %>% # exclude events where 'fire' is NA
+  group_by(raion_name) %>%
+  summarise(count = n(), .groups = 'drop')
+
+# when raion have NA replace with 0 since it means that there are no events
+wf_raions_summarized$count[is.na(wf_raions_summarized$count)] <- 0
+```
+
+```{r}
+# min-max standardization
+wf_raions_summarized <-  wf_raions_summarized %>%
+  mutate(intensity = (count - min(count, na.rm = TRUE)) / (max(count, na.rm = TRUE) - min(count, na.rm = TRUE)) * 100)
 ```
 
 #### Export datasets
@@ -317,10 +341,6 @@ idp_raion <- read.csv('data/displacement_data/updated_raions_2.csv')
 ```
 
 ```{r}
-old_raion <- read.csv('data/displacement_data/raions.csv')
-```
-
-```{r}
 # rename raion variable
 idp_raion <- idp_raion %>% rename(raion_name = ADM2_EN,
                                   oblast_name = ADM1_EN,
@@ -334,32 +354,68 @@ idp_raion_geom <- st_as_sf(idp_raion_geom, sf_column_name = "geometry")
 ```
 
 ```{r}
-# summarized dataset
-summarized_dataset <- idp_raion %>%
+# summarized dataset by raion
+summarized_dataset2 <- idp_raion %>%
+  group_by(raion_name) %>%
+  summarize(
+    net_refugee_outflow = mean(net_refugee_outflow, na.rm = TRUE),
+    net_pop_change = mean(net_pop_change, na.rm = TRUE),
+    mean_proportional_net_change = mean(proportional_net_change, na.rm = TRUE),
+   # total_baseline_raion_population = total_baseline_raion_population
+  )
+
+# add baseline population
+summarized_dataset2 <- summarized_dataset2 %>% left_join(idp_raion %>% 
+                                                           select(raion_name, total_baseline_raion_population) %>%
+                                                           distinct(raion_name, total_baseline_raion_population), 
+    by = 'raion_name') %>%
+  filter(!is.na(net_pop_change))
+```
+
+```{r}
+# summarized dataset by week and raion
+summarized_dataset2 <- idp_raion %>%
   group_by(raion_name, week_number) %>%
   summarize(
-    net_refugee_outflow = sum(net_refugee_outflow, na.rm = TRUE),
-    net_pop_change = sum(net_pop_change, na.rm = TRUE),
-    mean_proportional_net_change = mean(proportional_net_change, na.rm = TRUE)
-  )
+    net_refugee_outflow = mean(net_refugee_outflow, na.rm = TRUE),
+    net_pop_change = mean(net_pop_change, na.rm = TRUE),
+    mean_proportional_net_change = mean(proportional_net_change, na.rm = TRUE),
+    #total_baseline_raion_population = total_baseline_raion_population
+  ) %>%
+  filter(!is.na(net_pop_change))
 ```
 
 ### Relationship between IDPs data and war-fire intensity
 
 "net_refugee_outflow" is the net number of people leaving Ukraine on a particular day after the invasion\
 \
-"net_pop_change" is the
+"net_pop_change" is the rolling count of people moving in or out a given raion day by day
 
-"proportional_net_change" is the
+"proportional_net_change" is the the ratio between net change and baseline population
+
+### Broader time range calculation
 
 ```{r}
 # merge the datasets by raion_name and week_number
-merged_data <- raion_weekly %>%
-  inner_join(summarized_dataset, by = c("raion_name", "week_number")) %>%
-  select(raion_name, week, week_number, count, intensity, net_refugee_outflow, net_pop_change, mean_proportional_net_change) %>% 
+merged_data <- wf_raions_summarized %>%
+  inner_join(summarized_dataset, by = c("raion_name")) %>% 
+  select(raion_name, count, intensity, net_refugee_outflow, net_pop_change, mean_proportional_net_change) %>%
   rename(wf_count = count,
          wf_intensity = intensity)
 ```
+
+### Weekly level calculation
+
+```{r}
+# merge the datasets by raion_name and week_number
+merged_data2 <- raion_weekly %>%
+  inner_join(summarized_dataset2, by = c("raion_name", "week_number")) %>% 
+  select(raion_name, week, week_number, count, intensity, net_refugee_outflow, net_pop_change, mean_proportional_net_change) %>%
+  rename(wf_count = count,
+         wf_intensity = intensity)
+```
+
+### Outputs
 
 ```{r}
 # 1) calculate the correlation matrix
@@ -385,56 +441,54 @@ ggcorrplot(cor_matrix,
 ```
 
 ```{r}
-# 2) display the correlation between war-fire events intensity and population net change
 # calculate the correlation between wf_intensity and net_pop_change for each raion
 
 # function to calculate correlation for each raion
 calculate_correlation <- function(data) {
-  cor(data$wf_count, data$net_pop_change, use = "complete.obs")
+  cor(data$wf_intensity, data$net_pop_change, use = "complete.obs")
 }
 
-wf_idp_raion <- merged_data %>%
+wf_idp_raion2 <- merged_data2 %>%
   group_by(raion_name) %>%
-  summarize(total_net_pop_change = sum(net_pop_change, na.rm = TRUE),
-            sum_wf_count = sum(wf_count, na.rm = TRUE),
+  summarize(mean_net_pop_change = mean(net_pop_change, na.rm = TRUE),
+            mean_wf_count = mean(wf_count, na.rm = TRUE),
             correlation = calculate_correlation(cur_data_all()))
 
+#wf_idp_raion2$correlation <- cor(wf_idp_raion2$wf_count, wf_idp_raion2$net_pop_change, use = "complete.obs")
+
 # Apply Min-Max normalization to sum_wf_count directly within the mutate function
-wf_idp_raion <- wf_idp_raion %>%
-  mutate(wf_intensity = (sum_wf_count - min(sum_wf_count, na.rm = TRUE)) / 
-                                   (max(sum_wf_count, na.rm = TRUE) - min(sum_wf_count, na.rm = TRUE))) %>%
+wf_idp_raion2 <- wf_idp_raion2 %>%
+  mutate(wf_intensity = (mean_wf_count - min(mean_wf_count, na.rm = TRUE)) / 
+                                   (max(mean_wf_count, na.rm = TRUE) - min(mean_wf_count, na.rm = TRUE))) %>%
   rename(
-    net_pop_change = total_net_pop_change,
-    wf_count = sum_wf_count
+    net_pop_change = mean_net_pop_change,
+    wf_count = mean_wf_count
   )
 ```
 
 ```{r}
-cat("The correlation at raion level combining all weeks movements and counts is:", cor(wf_idp_raion$total_net_pop_change, wf_idp_raion$sum_wf_count, use = "complete.obs"), "\n")
-```
+wf_idp_raion <- merged_data
 
-```{r}
-# add geometry
-map_data <- wf_idp_raion %>%
-  left_join(raions %>% select(ADM2_EN, geometry), by = c("raion_name" = "ADM2_EN"))
-
-# convert raion_weekly to spatial data
-map_data <- st_as_sf(map_data, sf_column_name = 'geometry', crs = 4326)
-
-# plot the map with interaction
-tmap_mode("view")
-tm_shape(map_data) +
-  tm_polygons("correlation", title = "War-Fire Events and Net Population Change Correlation")
+wf_idp_raion$correlation <- cor(wf_idp_raion$net_pop_change, wf_idp_raion$wf_count, use = "complete.obs")
+cat("The correlation at raion level combining all weeks movements and counts is:", cor(wf_idp_raion$net_pop_change, wf_idp_raion$wf_count, use = "complete.obs"), "\n")
 ```
 
 ```{r}
 # 3) produce a bivariate map displaying intensity and net_pop_change
 # create a new variable for bivariate mapping
+map_data <- wf_idp_raion
 bivariate_data <- bi_class(map_data, x = net_pop_change, y = wf_count, style = "equal", dim = 3)
 
 map_data <- map_data %>%
   mutate(bivariate = bivariate_data$bi_class)
 
+# add geometry
+map_data <- map_data %>%
+  left_join(raions %>% select(ADM2_EN, geometry), by = c("raion_name" = "ADM2_EN"))
+
+# set up spatial dataset
+map_data <- st_as_sf(map_data, sf_column_name = 'geometry', crs = 4326)
+  
 # create map
 map <- ggplot() +
   geom_sf(data = map_data, mapping = aes(fill = bivariate), color = "white", size = 0.1, show.legend = FALSE) +
@@ -460,18 +514,41 @@ finalPlot <- ggdraw() +
 
 # Display the final plot
 finalPlot
+
+# save it
+ggsave(filename = "output/bivariate_map.png", plot = finalPlot, dpi = 300)
 ```
 
 ```{r}
 # create a new variable for bivariate mapping
-map_data <- map_data %>%
+map_data2 <- map_data2 %>%
   mutate(bivariate2 = cut(net_pop_change, breaks = 5, labels = FALSE) +
            cut(wf_intensity, breaks = 5, labels = FALSE))
 
 # plot the bivariate map
 tmap_mode("view")
-tm_shape(map_data) +
+tm_shape(map_data2) +
   tm_polygons("bivariate2", title = "Bivariate Map 2")
+```
+
+```{r}
+# add geometry
+map_data2 <- wf_idp_raion2 %>%
+  left_join(raions %>% select(ADM2_EN, geometry), by = c("raion_name" = "ADM2_EN"))
+
+# convert raion_weekly to spatial data
+map_data2 <- st_as_sf(map_data2, sf_column_name = 'geometry', crs = 4326)
+
+# plot the map with interaction
+tmap_mode("view")
+map <- tm_shape(map_data2) +
+  tm_polygons("correlation", title = "War-Fire Events and Net Population Change Correlation")
+
+# visualize map
+map
+
+# save the map to the output folder
+tmap_save(map, filename = "output/map_war_fire_idp_net_change_correlation.png", dpi = 300)
 ```
 
 ```{r}
@@ -489,6 +566,20 @@ interactive_scatter <- ggplotly(scatter_plot)
 
 # display the interactive scatterplot
 interactive_scatter
+```
+
+```{r}
+# Create the scatterplot
+scatter_plot <- ggplot(wf_idp_raion, aes(x = wf_intensity, y = net_pop_change)) +
+  geom_point() +
+  labs(title = "Scatterplot between War-Fire Intensity and Net Population Change",
+       x = "War Fire Intensity",
+       y = "Net Population Change")
+
+scatter_plot
+
+# Save the scatterplot to the output folder with specified DPI
+ggsave(filename = "output/war_id_population_change_plot.png", plot = scatter_plot, dpi = 300)
 ```
 
 ```{r}
@@ -596,7 +687,9 @@ wf_idp_raion %>%
   scale_colour_distiller(palette = "RdBu", direction = -1) +
   guides(colour = "none") + # Remove colour legend
   scale_size_continuous(name = "Net migration \ncount (thousand)") +
-  # Add median migration rate by population density
+  # change scale on x-axis
+  scale_x_continuous(breaks = c(-600000, -300000, -100000, 0, 100000), 
+                     labels = c("-600k", "-300k", "-100k", "0", "100k")) +
   geom_point(aes(x = net_pop_change), shape = 124, color = "cyan", size = 3) +
   theme_minimal() +
   theme(
@@ -632,8 +725,13 @@ ggplot(data = wf_idp_raion_geom) +
   coord_sf() +
   scale_fill_brewer(palette = "PuRd", direction = 1) +
   theme_void() +
-  guides(fill = guide_legend(title = "Quantile")) +
-  geom_sf(data = raions, aes(geometry = geometry), col = "white", size = 0.5, fill = "transparent")
+  guides(fill = guide_legend(title = "War-Fire Intensity")) +
+  geom_sf(data = raions, aes(geometry = geometry), col = "black", size = 0.5, fill = "transparent")
+```
+
+```{r}
+# save the map plot
+ggsave(filename = "output/war_fire_intensity_map.png", plot = map_plot, dpi = 300)
 ```
 
 ```{r}
