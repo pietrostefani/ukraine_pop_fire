@@ -331,6 +331,17 @@ tm_shape(raion_weekly_animation %>%
 tmap_mode("view")
 ```
 
+#### War-fire events across the number of weeks 
+
+```{r}
+# plot war-fire events across the number of weeks
+ggplot(raion_weekly, aes(x = week_number, y = count)) +
+  geom_line(color = "blue") +
+  geom_point(color = "blue") +
+  labs(title = "War Fire Events Across Weeks", x = "Week Number", y = "War Fire Events") +
+  theme_minimal()
+```
+
 ## Internal Displacement and War-Fire Events
 
 ### IDPs data
@@ -369,7 +380,7 @@ summarized_dataset2 <- summarized_dataset2 %>% left_join(idp_raion %>%
                                                            select(raion_name, total_baseline_raion_population) %>%
                                                            distinct(raion_name, total_baseline_raion_population), 
     by = 'raion_name') %>%
-  filter(!is.na(net_pop_change))
+  filter(!is.na(net_pop_change)) # remove areas where population change is NA
 ```
 
 ```{r}
@@ -382,7 +393,7 @@ summarized_dataset2 <- idp_raion %>%
     mean_proportional_net_change = mean(proportional_net_change, na.rm = TRUE),
     #total_baseline_raion_population = total_baseline_raion_population
   ) %>%
-  filter(!is.na(net_pop_change))
+  filter(!is.na(net_pop_change)) # remove areas where population change is NA
 ```
 
 ### Relationship between IDPs data and war-fire intensity
@@ -468,9 +479,6 @@ wf_idp_raion2 <- wf_idp_raion2 %>%
 
 ```{r}
 wf_idp_raion <- merged_data
-
-wf_idp_raion$correlation <- cor(wf_idp_raion$net_pop_change, wf_idp_raion$wf_count, use = "complete.obs")
-cat("The correlation at raion level combining all weeks movements and counts is:", cor(wf_idp_raion$net_pop_change, wf_idp_raion$wf_count, use = "complete.obs"), "\n")
 ```
 
 ```{r}
@@ -569,7 +577,7 @@ interactive_scatter
 ```
 
 ```{r}
-# Create the scatterplot
+# create the static scatterplot
 scatter_plot <- ggplot(wf_idp_raion, aes(x = wf_intensity, y = net_pop_change)) +
   geom_point() +
   labs(title = "Scatterplot between War-Fire Intensity and Net Population Change",
@@ -578,7 +586,7 @@ scatter_plot <- ggplot(wf_idp_raion, aes(x = wf_intensity, y = net_pop_change)) 
 
 scatter_plot
 
-# Save the scatterplot to the output folder with specified DPI
+# save it
 ggsave(filename = "output/war_id_population_change_plot.png", plot = scatter_plot, dpi = 300)
 ```
 
@@ -675,7 +683,6 @@ wf_idp_raion$intensity_quantile %>%
 ```
 
 ```{r}
-# Replace theme_tufte2 with theme_minimal for this example
 wf_idp_raion %>% 
   ggplot(aes(x = net_pop_change, y = intensity_quantile)) + 
   # Add vertical line at x = 0
@@ -726,7 +733,7 @@ ggplot(data = wf_idp_raion_geom) +
   scale_fill_brewer(palette = "PuRd", direction = 1) +
   theme_void() +
   guides(fill = guide_legend(title = "War-Fire Intensity")) +
-  geom_sf(data = raions, aes(geometry = geometry), col = "black", size = 0.5, fill = "transparent")
+  geom_sf(data = raions, aes(geometry = geometry), col = "black", size = 0.5, fill = "transparent") # add all raions geometries
 ```
 
 ```{r}
@@ -737,6 +744,8 @@ ggsave(filename = "output/war_fire_intensity_map.png", plot = map_plot, dpi = 30
 ```{r}
 war_intensity_density_map <- last_plot()
 ```
+
+## Generate outputs for only given weeks
 
 ### Code Dump
 
