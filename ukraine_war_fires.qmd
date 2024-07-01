@@ -331,7 +331,7 @@ tm_shape(raion_weekly_animation %>%
 tmap_mode("view")
 ```
 
-#### War-fire events across the number of weeks 
+#### War-fire events across the number of weeks
 
 ```{r}
 # plot war-fire events across the number of weeks
