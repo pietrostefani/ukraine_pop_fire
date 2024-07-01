@@ -7,8 +7,6 @@ editor: visual
 
 ## War Fire
 
-Here Some Description
-
 ## Code
 
 ### Load Data
@@ -409,7 +407,7 @@ summarized_dataset2 <- idp_raion %>%
 ```{r}
 # merge the datasets by raion_name and week_number
 merged_data <- wf_raions_summarized %>%
-  inner_join(summarized_dataset, by = c("raion_name")) %>% 
+  inner_join(summarized_dataset2, by = c("raion_name")) %>% 
   select(raion_name, count, intensity, net_refugee_outflow, net_pop_change, mean_proportional_net_change) %>%
   rename(wf_count = count,
          wf_intensity = intensity)
@@ -524,19 +522,7 @@ finalPlot <- ggdraw() +
 finalPlot
 
 # save it
-ggsave(filename = "output/bivariate_map.png", plot = finalPlot, dpi = 300)
-```
-
-```{r}
-# create a new variable for bivariate mapping
-map_data2 <- map_data2 %>%
-  mutate(bivariate2 = cut(net_pop_change, breaks = 5, labels = FALSE) +
-           cut(wf_intensity, breaks = 5, labels = FALSE))
-
-# plot the bivariate map
-tmap_mode("view")
-tm_shape(map_data2) +
-  tm_polygons("bivariate2", title = "Bivariate Map 2")
+#ggsave(filename = "output/bivariate_map.png", plot = finalPlot, dpi = 300)
 ```
 
 ```{r}
@@ -556,14 +542,26 @@ map <- tm_shape(map_data2) +
 map
 
 # save the map to the output folder
-tmap_save(map, filename = "output/map_war_fire_idp_net_change_correlation.png", dpi = 300)
+#tmap_save(map, filename = "output/map_war_fire_idp_net_change_correlation.png", dpi = 300)
+```
+
+```{r}
+# create a new variable for bivariate mapping
+map_data2 <- map_data2 %>%
+  mutate(bivariate2 = cut(net_pop_change, breaks = 5, labels = FALSE) +
+           cut(wf_intensity, breaks = 5, labels = FALSE))
+
+# plot the bivariate map
+tmap_mode("view")
+tm_shape(map_data2) +
+  tm_polygons("bivariate2", title = "Bivariate Map 2")
 ```
 
 ```{r}
 # 4) produce a scatterplot between intensity and net_pop_change
 
 # plot the scatterplot
-scatter_plot <- ggplot(wf_idp_raion, aes(x = wf_intensity, y = net_pop_change, text = raion_name)) +
+scatter_plot <- ggplot(wf_idp_raion2, aes(x = wf_intensity, y = net_pop_change, text = raion_name)) +
   geom_point() +
   labs(title = "Scatterplot between War-Fire Intensity and Net Population Change",
        x = "War Fire Intensity",
@@ -587,7 +585,7 @@ scatter_plot <- ggplot(wf_idp_raion, aes(x = wf_intensity, y = net_pop_change)) 
 scatter_plot
 
 # save it
-ggsave(filename = "output/war_id_population_change_plot.png", plot = scatter_plot, dpi = 300)
+#ggsave(filename = "output/war_id_population_change_plot.png", plot = scatter_plot, dpi = 300)
 ```
 
 ```{r}
@@ -745,7 +743,72 @@ ggsave(filename = "output/war_fire_intensity_map.png", plot = map_plot, dpi = 30
 war_intensity_density_map <- last_plot()
 ```
 
-## Generate outputs for only given weeks
+### Correlation Chart - War-fire events and IDP by week
+
+```{r}
+weekly_correlation <- merged_data2 %>%
+  group_by(week_number, week) %>%
+  summarize(correlation = cor(wf_count, net_pop_change, use = "complete.obs"),
+            net_pop_change = sum(net_pop_change),
+            wf_count = sum(wf_count))
+
+```
+
+```{r}
+library(scales) # for date formatting
+
+# Plot the correlation
+ggplot(weekly_correlation, aes(x = week, y = correlation)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "War-Fire Events and Net Population Change Correlation by Week",
+       x = "Week",
+       y = "Correlation") +
+  scale_y_reverse() +
+  #scale_x_continuous(breaks = seq(0, max(weekly_correlation$week_number), by = 5)) +
+  scale_x_date(breaks = seq(min(weekly_correlation$week), max(weekly_correlation$week), by = "5 weeks"),
+               labels = date_format("%Y-%m-%d")) +
+  theme_minimal()
+
+# save it
+ggsave(filename = "output/figures/weekly_correlation.png", plot = scatter_plot, dpi = 300)
+```
+
+```{r}
+# create the static scatterplot for specific weeks
+selected_week_number = 5
+
+# plot the scatterplot
+selected_week_scatter_plot <- ggplot(merged_data2 %>% filter(week_number == selected_week_number), aes(x = wf_count, y = net_pop_change, text = raion_name)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(title = "Scatterplot between War-Fire Intensity and Net Population Change",
+       x = "War Fire Events Count",
+       y = "Net Population Change")
+
+# make the scatterplot interactive
+interactive_scatter_selected_week <- ggplotly(selected_week_scatter_plot)
+
+# display the interactive scatterplot
+interactive_scatter_selected_week
+```
+
+```{r}
+selected_week_number = 5
+
+# create the static scatterplot
+scatter_plot <- ggplot(merged_data2 %>% filter(week_number == selected_week_number), aes(x = wf_intensity, y = net_pop_change)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(title = paste("War-Fire Intensity and Net Population Change - Week", selected_week_number),
+       x = "War Fire Intensity",
+       y = "Net Population Change")
+
+scatter_plot
+
+# save it
+#ggsave(filename = "output/war_id_population_change_plot.png", plot = scatter_plot, dpi = 300)
+```
 
 ### Code Dump
 
